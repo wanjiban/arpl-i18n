@@ -1,4 +1,4 @@
-# Automated Redpill Loader (i18n)
+# Automated Redpill Loader (i18n) - Fork
 
 本库为 arpl i18n (多语言优化版): 
 
