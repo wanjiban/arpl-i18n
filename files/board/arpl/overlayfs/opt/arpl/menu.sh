@@ -29,13 +29,13 @@ KEYMAP="$(readConfigKey "keymap" "${USER_CONFIG_FILE}")"
 LKM="$(readConfigKey "lkm" "${USER_CONFIG_FILE}")"
 DSMLOGO="$(readConfigKey "dsmlogo" "${USER_CONFIG_FILE}")"
 DIRECTBOOT="$(readConfigKey "directboot" "${USER_CONFIG_FILE}")"
-NOTSETMACS="$(readConfigKey "notsetmacs" "${USER_CONFIG_FILE}")"
 PRERELEASE="$(readConfigKey "prerelease" "${USER_CONFIG_FILE}")"
 BOOTWAIT="$(readConfigKey "bootwait" "${USER_CONFIG_FILE}")"
 BOOTIPWAIT="$(readConfigKey "bootipwait" "${USER_CONFIG_FILE}")"
 KERNELWAY="$(readConfigKey "kernelway" "${USER_CONFIG_FILE}")"
-ODP="$(readConfigKey "odp" "${USER_CONFIG_FILE}")"  # official drivers priorities
+ODP="$(readConfigKey "odp" "${USER_CONFIG_FILE}")" # official drivers priorities
 SN="$(readConfigKey "sn" "${USER_CONFIG_FILE}")"
+MAC1="$(readConfigKey "mac1" "${USER_CONFIG_FILE}")"
 
 ###############################################################################
 # Mounts backtitle dynamically
@@ -117,7 +117,7 @@ function modelMenu() {
         [ ${COMPATIBLE} -eq 1 ] && echo "${M} \"$(printf "\Zb%-12s\Zn \Z4%-2s\Zn" "${PLATFORM}" "${DT}")\" " >>"${TMP_PATH}/menu"
       done < <(cat "${TMP_PATH}/modellist" | sort -r -n -k 2)
       [ ${FLGNEX} -eq 1 ] && echo "f \"\Z1$(TEXT "Disable flags restriction")\Zn\"" >>"${TMP_PATH}/menu"
-      [ ${FLGBETA} -eq 0 ] && echo "b \"\Z1$(TEXT "Show beta models")\Zn\"" >>"${TMP_PATH}/menu"
+      [ ${FLGBETA} -eq 0 ] && echo "b \"\Z1$(TEXT "Show all models")\Zn\"" >>"${TMP_PATH}/menu"
       dialog --backtitle "$(backtitle)" --colors \
         --menu "$(TEXT "Choose the model")" 0 0 0 --file "${TMP_PATH}/menu" \
         2>${TMP_PATH}/resp
@@ -151,6 +151,11 @@ function modelMenu() {
     writeConfigKey "patsum" "" "${USER_CONFIG_FILE}"
     SN=$(generateSerial "${MODEL}")
     writeConfigKey "sn" "${SN}" "${USER_CONFIG_FILE}"
+    NETIF_NUM=1
+    MACS=($(generateMacAddress "${MODEL}" ${NETIF_NUM}))
+    for I in $(seq 1 ${NETIF_NUM}); do
+      writeConfigKey "mac${I}" "${MACS[$((${I} - 1))]}" "${USER_CONFIG_FILE}"
+    done
     DIRTY=1
   fi
 }
@@ -170,18 +175,23 @@ function productversMenu() {
     if ! arrayExistItem "${1}" ${ITEMS}; then return; fi
     resp="${1}"
   fi
-  if [ "${PRODUCTVER}" != "${resp}" ]; then
-    local KVER=$(readModelKey "${MODEL}" "productvers.[${resp}].kver")
-    if [ -d "/sys/firmware/efi" -a "${KVER:0:1}" = "3" ]; then
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
-        --msgbox "$(TEXT "This version does not support UEFI startup, Please select another version or switch the startup mode.")" 0 0
-      return
-    fi
-    if [ ! "usb" = "$(udevadm info --query property --name ${LOADER_DISK} | grep ID_BUS | cut -d= -f2)" -a "${KVER:0:1}" = "5" ]; then
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
-        --msgbox "$(TEXT "This version only support usb startup, Please select another version or switch the startup mode.")" 0 0
-      # return
-    fi
+  if [ "${PRODUCTVER}" = "${resp}" ]; then
+    dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
+      --yesno "$(printf "$(TEXT "The current version has been set to %s. Do you want to reset the version?")" "${PRODUCTVER}")" 0 0
+    [ $? -ne 0 ] && return
+  fi
+  local KVER=$(readModelKey "${MODEL}" "productvers.[${resp}].kver")
+  if [ -d "/sys/firmware/efi" -a "${KVER:0:1}" = "3" ]; then
+    dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
+      --msgbox "$(TEXT "This version does not support UEFI startup, Please select another version or switch the startup mode.")" 0 0
+    return
+  fi
+  if [ ! "usb" = "$(udevadm info --query property --name ${LOADER_DISK} | grep ID_BUS | cut -d= -f2)" -a "${KVER:0:1}" = "5" ]; then
+    dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
+      --msgbox "$(TEXT "This version only support usb startup, Please select another version or switch the startup mode.")" 0 0
+    # return
+  fi
+  while true; do
     # get online pat data
     dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
       --infobox "$(TEXT "Get pat data ..")" 0 0
@@ -210,46 +220,50 @@ function productversMenu() {
       MSG="$(TEXT "Successfully to get pat data,\nPlease confirm or modify as needed.")"
     fi
     dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
+      --extra-button --extra-label "$(TEXT "Retry")" \
       --form "${MSG}" 10 110 2 "URL" 1 1 "${paturl}" 1 5 100 0 "MD5" 2 1 "${patsum}" 2 5 100 0 \
       2>"${TMP_PATH}/resp"
-    [ $? -ne 0 ] && return
-    paturl="$(cat "${TMP_PATH}/resp" | tail -n +1 | head -1)"
-    patsum="$(cat "${TMP_PATH}/resp" | tail -n +2 | head -1)"
-    [ -z "${paturl}" -o -z "${patsum}" ] && return
-    writeConfigKey "paturl" "${paturl}" "${USER_CONFIG_FILE}"
-    writeConfigKey "patsum" "${patsum}" "${USER_CONFIG_FILE}"
-    PRODUCTVER=${resp}
-    writeConfigKey "productver" "${PRODUCTVER}" "${USER_CONFIG_FILE}"
-    BUILDNUM=""
-    SMALLNUM=""
-    writeConfigKey "buildnum" "${BUILDNUM}" "${USER_CONFIG_FILE}"
-    writeConfigKey "smallnum" "${SMALLNUM}" "${USER_CONFIG_FILE}"
-    dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
-      --infobox "$(TEXT "Reconfiguring Synoinfo, Addons and Modules")" 0 0
-    # Delete synoinfo and reload model/build synoinfo
-    writeConfigKey "synoinfo" "{}" "${USER_CONFIG_FILE}"
-    while IFS=': ' read KEY VALUE; do
-      writeConfigKey "synoinfo.${KEY}" "${VALUE}" "${USER_CONFIG_FILE}"
-    done < <(readModelMap "${MODEL}" "productvers.[${PRODUCTVER}].synoinfo")
-    # Check addons
-    PLATFORM="$(readModelKey "${MODEL}" "platform")"
-    KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
-    KPRE="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kpre")"
-    while IFS=': ' read ADDON PARAM; do
-      [ -z "${ADDON}" ] && continue
-      if ! checkAddonExist "${ADDON}" "${PLATFORM}" "${KVER}"; then
-        deleteConfigKey "addons.${ADDON}" "${USER_CONFIG_FILE}"
-      fi
-    done < <(readConfigMap "addons" "${USER_CONFIG_FILE}")
-    # Rebuild modules
-    writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
-    while read ID DESC; do
-      writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
-    done < <(getAllModules "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}")
-    # Remove old files
-    rm -f "${ORI_ZIMAGE_FILE}" "${ORI_RDGZ_FILE}" "${MOD_ZIMAGE_FILE}" "${MOD_RDGZ_FILE}"
-    DIRTY=1
-  fi
+    RET=$?
+    [ ${RET} -eq 0 ] && break    # ok-button
+    [ ${RET} -eq 3 ] && continue # extra-button
+    return                       # 1 or 255  # cancel-button or ESC
+  done
+  paturl="$(cat "${TMP_PATH}/resp" | sed -n '1p')"
+  patsum="$(cat "${TMP_PATH}/resp" | sed -n '2p')"
+  [ -z "${paturl}" -o -z "${patsum}" ] && return
+  writeConfigKey "paturl" "${paturl}" "${USER_CONFIG_FILE}"
+  writeConfigKey "patsum" "${patsum}" "${USER_CONFIG_FILE}"
+  PRODUCTVER=${resp}
+  writeConfigKey "productver" "${PRODUCTVER}" "${USER_CONFIG_FILE}"
+  BUILDNUM=""
+  SMALLNUM=""
+  writeConfigKey "buildnum" "${BUILDNUM}" "${USER_CONFIG_FILE}"
+  writeConfigKey "smallnum" "${SMALLNUM}" "${USER_CONFIG_FILE}"
+  dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Product Version")" \
+    --infobox "$(TEXT "Reconfiguring Synoinfo, Addons and Modules")" 0 0
+  # Delete synoinfo and reload model/build synoinfo
+  writeConfigKey "synoinfo" "{}" "${USER_CONFIG_FILE}"
+  while IFS=': ' read KEY VALUE; do
+    writeConfigKey "synoinfo.${KEY}" "${VALUE}" "${USER_CONFIG_FILE}"
+  done < <(readModelMap "${MODEL}" "productvers.[${PRODUCTVER}].synoinfo")
+  # Check addons
+  PLATFORM="$(readModelKey "${MODEL}" "platform")"
+  KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
+  KPRE="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kpre")"
+  while IFS=': ' read ADDON PARAM; do
+    [ -z "${ADDON}" ] && continue
+    if ! checkAddonExist "${ADDON}" "${PLATFORM}" "${KVER}"; then
+      deleteConfigKey "addons.${ADDON}" "${USER_CONFIG_FILE}"
+    fi
+  done < <(readConfigMap "addons" "${USER_CONFIG_FILE}")
+  # Rebuild modules
+  writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
+  while read ID DESC; do
+    writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
+  done < <(getAllModules "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}")
+  # Remove old files
+  rm -f "${ORI_ZIMAGE_FILE}" "${ORI_RDGZ_FILE}" "${MOD_ZIMAGE_FILE}" "${MOD_RDGZ_FILE}"
+  DIRTY=1
 }
 
 ###############################################################################
@@ -281,7 +295,7 @@ function addonMenu() {
     case "$(<${TMP_PATH}/resp)" in
     a)
       NEXT='a'
-      rm "${TMP_PATH}/menu"
+      rm -f "${TMP_PATH}/menu"
       while read ADDON DESC; do
         arrayExistItem "${ADDON}" "${!ADDONS[@]}" && continue # Check if addon has already been added
         echo "${ADDON} \"${DESC}\"" >>"${TMP_PATH}/menu"
@@ -384,6 +398,7 @@ function addonMenu() {
         fi
         ADDON="$(untarAddon "${TMP_UP_PATH}/${USER_FILE}")"
         if [ -n "${ADDON}" ]; then
+          [ -f "${CACHE_PATH}/addons/VERSION" ] && rm -f "${CACHE_PATH}/addons/VERSION"
           dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Addons")" \
             --msgbox "$(printf "$(TEXT "Addon '%s' added to loader, Please enable it in 'Add an addon' menu.")" "${ADDON}")" 0 0
         else
@@ -402,38 +417,69 @@ function moduleMenu() {
   PLATFORM="$(readModelKey "${MODEL}" "platform")"
   KVER="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kver")"
   KPRE="$(readModelKey "${MODEL}" "productvers.[${PRODUCTVER}].kpre")"
-
-  dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-    --infobox "$(TEXT "Reading modules")" 0 0
-  ALLMODULES=$(getAllModules "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}")
-  unset USERMODULES
-  declare -A USERMODULES
-  while IFS=': ' read KEY VALUE; do
-    [ -n "${KEY}" ] && USERMODULES["${KEY}"]="${VALUE}"
-  done < <(readConfigMap "modules" "${USER_CONFIG_FILE}")
-  NEXT="s"
+  NEXT="c"
   # loop menu
   while true; do
     dialog --backtitle "$(backtitle)" --colors \
       --default-item ${NEXT} --menu "$(TEXT "Choose a option")" 0 0 0 \
-      s "$(TEXT "Show selected modules")" \
+      c "$(TEXT "Show/Select modules")" \
       l "$(TEXT "Select loaded modules")" \
-      a "$(TEXT "Select all modules")" \
-      d "$(TEXT "Deselect all modules")" \
-      c "$(TEXT "Choose modules to include")" \
       o "$(TEXT "Upload a external module")" \
       p "$(TEXT "Priority use of official drivers:") \Z4${ODP}\Zn" \
       e "$(TEXT "Exit")" \
       2>${TMP_PATH}/resp
     [ $? -ne 0 ] && break
     case "$(<${TMP_PATH}/resp)" in
-    s)
-      ITEMS=""
-      for KEY in ${!USERMODULES[@]}; do
-        ITEMS+="${KEY}: ${USERMODULES[$KEY]}\n"
+    c)
+      while true; do
+        dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
+          --infobox "$(TEXT "Reading modules")" 0 0
+        ALLMODULES=$(getAllModules "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}")
+        unset USERMODULES
+        declare -A USERMODULES
+        while IFS=': ' read KEY VALUE; do
+          [ -n "${KEY}" ] && USERMODULES["${KEY}"]="${VALUE}"
+        done < <(readConfigMap "modules" "${USER_CONFIG_FILE}")
+        rm -f "${TMP_PATH}/opts"
+        while read ID DESC; do
+          arrayExistItem "${ID}" "${!USERMODULES[@]}" && ACT="on" || ACT="off"
+          echo "${ID} ${DESC} ${ACT}" >>"${TMP_PATH}/opts"
+        done <<<${ALLMODULES}
+        dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
+          --extra-button --extra-label "$(TEXT "Select all")" \
+          --help-button --help-label "$(TEXT "Deselect all")" \
+          --checklist "$(TEXT "Select modules to include")" 0 0 0 --file "${TMP_PATH}/opts" \
+          2>${TMP_PATH}/resp
+        RET=$?
+        case ${RET} in
+        0) # ok-button
+          resp=$(<${TMP_PATH}/resp)
+          writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
+          for ID in ${resp}; do
+            writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
+          done
+          DIRTY=1
+          break
+          ;;
+        3) # extra-button
+          writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
+          while read ID DESC; do
+            writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
+          done <<<${ALLMODULES}
+          DIRTY=1
+          ;;
+        2) # help-button
+          writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
+          DIRTY=1
+          ;;
+        1) # cancel-button
+          break
+          ;;
+        255) # ESC
+          break
+          ;;
+        esac
       done
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-        --msgbox "${ITEMS}" 0 0
       ;;
     l)
       dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
@@ -443,61 +489,12 @@ function moduleMenu() {
         KOLIST+="$(getdepends "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}" "${I}") ${I} "
       done
       KOLIST=($(echo ${KOLIST} | tr ' ' '\n' | sort -u))
-      unset USERMODULES
-      declare -A USERMODULES
       writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
       for ID in ${KOLIST[@]}; do
-        USERMODULES["${ID}"]=""
         writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
       done
       DIRTY=1
       ;;
-    a)
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-        --infobox "$(TEXT "Selecting all modules")" 0 0
-      unset USERMODULES
-      declare -A USERMODULES
-      writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
-      while read ID DESC; do
-        USERMODULES["${ID}"]=""
-        writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
-      done <<<${ALLMODULES}
-      DIRTY=1
-      ;;
-
-    d)
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-        --infobox "$(TEXT "Deselecting all modules")" 0 0
-      writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
-      unset USERMODULES
-      declare -A USERMODULES
-      DIRTY=1
-      ;;
-
-    c)
-      rm -f "${TMP_PATH}/opts"
-      while read ID DESC; do
-        arrayExistItem "${ID}" "${!USERMODULES[@]}" && ACT="on" || ACT="off"
-        echo "${ID} ${DESC} ${ACT}" >>"${TMP_PATH}/opts"
-      done <<<${ALLMODULES}
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-        --checklist "$(TEXT "Select modules to include")" 0 0 0 --file "${TMP_PATH}/opts" \
-        2>${TMP_PATH}/resp
-      [ $? -ne 0 ] && continue
-      resp=$(<${TMP_PATH}/resp)
-      [ -z "${resp}" ] && continue
-      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
-        --infobox "$(TEXT "Writing to user config")" 0 0
-      unset USERMODULES
-      declare -A USERMODULES
-      writeConfigKey "modules" "{}" "${USER_CONFIG_FILE}"
-      for ID in ${resp}; do
-        USERMODULES["${ID}"]=""
-        writeConfigKey "modules.${ID}" "" "${USER_CONFIG_FILE}"
-      done
-      DIRTY=1
-      ;;
-
     o)
       MSG=""
       MSG+="$(TEXT "This function is experimental and dangerous. If you don't know much, please exit.\n")"
@@ -523,6 +520,7 @@ function moduleMenu() {
       popd
       if [ -n "${USER_FILE}" -a "${USER_FILE##*.}" = "ko" ]; then
         addToModules ${PLATFORM} "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}" "${TMP_UP_PATH}/${USER_FILE}"
+        [ -f "${CACHE_PATH}/modules/VERSION" ] && rm -f "${CACHE_PATH}/modules/VERSION"
         dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Modules")" \
           --msgbox "$(printf "$(TEXT "Module '%s' added to %s-%s")" "${USER_FILE}" "${PLATFORM}" "$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}")" 0 0
         rm -f "${TMP_UP_PATH}/${USER_FILE}"
@@ -552,9 +550,8 @@ function cmdlineMenu() {
   echo "a \"$(TEXT "Add/edit a cmdline item")\"" >"${TMP_PATH}/menu"
   echo "d \"$(TEXT "Delete cmdline item(s)")\"" >>"${TMP_PATH}/menu"
   if [ -n "${MODEL}" ]; then
-    echo "s \"$(TEXT "Define a serial number")\"" >>"${TMP_PATH}/menu"
+    echo "s \"$(TEXT "Define SN/MAC")\"" >>"${TMP_PATH}/menu"
   fi
-  echo "c \"$(TEXT "Define a custom MAC")\"" >>"${TMP_PATH}/menu"
   echo "v \"$(TEXT "Show user added cmdline")\"" >>"${TMP_PATH}/menu"
   echo "m \"$(TEXT "Show model inherent cmdline")\"" >>"${TMP_PATH}/menu"
   echo "e \"$(TEXT "Exit")\"" >>"${TMP_PATH}/menu"
@@ -602,66 +599,42 @@ function cmdlineMenu() {
       done
       ;;
     s)
+      MSG="$(TEXT "Note: (MAC will not be set to NIC)")"
+      sn="${SN}"
+      mac1="${MAC1}"
       while true; do
         dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-          --inputbox "$(TEXT "Please enter a serial number ")" 0 0 "" \
-          2>${TMP_PATH}/resp
-        [ $? -ne 0 ] && break 2
-        SERIAL=$(cat ${TMP_PATH}/resp)
-        if [ -z "${SERIAL}" ]; then
-          return
-        elif [ $(validateSerial ${MODEL} ${SERIAL}) -eq 1 ]; then
+          --extra-button --extra-label "$(TEXT "Random")" \
+          --form "${MSG}" 10 110 2 "sn" 1 1 "${sn}" 1 5 100 0 "mac1" 2 1 "${mac1}" 2 5 100 0 \
+          2>"${TMP_PATH}/resp"
+        RET=$?
+        case ${RET} in
+        0) # ok-button
+          sn="$(cat "${TMP_PATH}/resp" | sed -n '1p')"
+          mac1="$(cat "${TMP_PATH}/resp" | sed -n '2p')"
+          if [ -z "${sn}" -o -z "${mac1}" ]; then
+            dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
+              --yesno "$(TEXT "Invalid SN/MAC, retry?")" 0 0
+            [ $? -eq 0 ] && break
+          fi
+          SN="${sn}"
+          writeConfigKey "sn" "${SN}" "${USER_CONFIG_FILE}"
+          MAC1="${mac1}"
+          writeConfigKey "mac1" "${MAC1}" "${USER_CONFIG_FILE}"
           break
-        fi
-        # At present, the SN rules are not complete, and many SNs are not truly invalid, so not provide tips now.
-        break
-        dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-          --yesno "$(TEXT "Invalid serial, continue?")" 0 0
-        [ $? -eq 0 ] && break
-      done
-      SN="${SERIAL}"
-      writeConfigKey "sn" "${SN}" "${USER_CONFIG_FILE}"
-      ;;
-    c)
-      ETHX=($(ls /sys/class/net/ | grep eth)) # real network cards list
-      for N in $( # Currently, only up to 8 are supported.  (<==> boot.sh L96, <==> lkm: MAX_NET_IFACES)
-        seq 1 8
-      ); do
-        MACR="$(cat /sys/class/net/${ETHX[$(expr ${N} - 1)]}/address | sed 's/://g')"
-        MACF=${CMDLINE["mac${N}"]}
-        [ -n "${MACF}" ] && MAC=${MACF} || MAC=${MACR}
-        RET=1
-        while true; do
-          dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-            --inputbox "$(printf "$(TEXT "Type a custom MAC address of %s")" "mac${N}")" 0 0 "${MAC}" \
-            2>${TMP_PATH}/resp
-          RET=$?
-          [ ${RET} -ne 0 ] && break 2
-          MAC="$(<"${TMP_PATH}/resp")"
-          [ -z "${MAC}" ] && MAC="$(readConfigKey "original-mac${i}" "${USER_CONFIG_FILE}")"
-          [ -z "${MAC}" ] && MAC="${MACFS[$(expr ${i} - 1)]}"
-          MACF="$(echo "${MAC}" | sed "s/:\|-\| //g")"
-          [ ${#MACF} -eq 12 ] && break
-          dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-            --msgbox "$(TEXT "Invalid MAC")" 0 0
-        done
-        if [ ${RET} -eq 0 ]; then
-          CMDLINE["mac${N}"]="${MACF}"
-          CMDLINE["netif_num"]=${N}
-          writeConfigKey "cmdline.mac${N}" "${MACF}" "${USER_CONFIG_FILE}"
-          writeConfigKey "cmdline.netif_num" "${N}" "${USER_CONFIG_FILE}"
-          MAC="${MACF:0:2}:${MACF:2:2}:${MACF:4:2}:${MACF:6:2}:${MACF:8:2}:${MACF:10:2}"
-          ip link set dev ${ETHX[$(expr ${N} - 1)]} address "${MAC}" 2>&1 |
-            dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-              --progressbox "$(TEXT "Changing MAC")" 20 70
-          /etc/init.d/S41dhcpcd restart 2>&1 |
-            dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-              --progressbox "$(TEXT "Renewing IP")" 20 70
-          # IP=`ip route 2>/dev/null | sed -n 's/.* via .* dev \(.*\)  src \(.*\)  metric .*/\1: \2 /p' | head -1`
-          dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Cmdline")" \
-            --yesno "$(TEXT "Continue to custom MAC?")" 0 0
-          [ $? -ne 0 ] && break
-        fi
+          ;;
+        3) # extra-button
+          sn=$(generateSerial "${MODEL}")
+          MACS=($(generateMacAddress "${MODEL}" 1))
+          mac1=${MACS[0]}
+          ;;
+        1) # cancel-button
+          break
+          ;;
+        255) # ESC
+          break
+          ;;
+        esac
       done
       ;;
     v)
@@ -796,7 +769,7 @@ function extractDsmFiles() {
     fi
     STATUS=$(curl -k -w "%{http_code}" -L "${PATURL}" -o "${PAT_PATH}" --progress-bar)
     if [ $? -ne 0 -o ${STATUS} -ne 200 ]; then
-      rm "${PAT_PATH}"
+      rm -f "${PAT_PATH}"
       dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Error")" \
         --msgbox "$(TEXT "Check internet or cache disk space")" 0 0
       return 1
@@ -858,7 +831,7 @@ function extractDsmFiles() {
         fi
         STATUS=$(curl -k -w "%{http_code}" -L "${OLDPATURL}" -o "${OLDPAT_PATH}" --progress-bar)
         if [ $? -ne 0 -o ${STATUS} -ne 200 ]; then
-          rm "${OLDPAT_PATH}"
+          rm -f "${OLDPAT_PATH}"
           dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Error")" \
             --msgbox "$(TEXT "Check internet or cache disk space")" 0 0
           return 1
@@ -883,9 +856,9 @@ function extractDsmFiles() {
       ) >/dev/null 2>&1 || true
       # Copy only necessary files
       for f in libcurl.so.4 libmbedcrypto.so.5 libmbedtls.so.13 libmbedx509.so.1 libmsgpackc.so.2 libsodium.so libsynocodesign-ng-virtual-junior-wins.so.7; do
-        cp "${RAMDISK_PATH}/usr/lib/${f}" "${EXTRACTOR_PATH}"
+        cp -f "${RAMDISK_PATH}/usr/lib/${f}" "${EXTRACTOR_PATH}"
       done
-      cp "${RAMDISK_PATH}/usr/syno/bin/scemd" "${EXTRACTOR_PATH}/${EXTRACTOR_BIN}"
+      cp -f "${RAMDISK_PATH}/usr/syno/bin/scemd" "${EXTRACTOR_PATH}/${EXTRACTOR_BIN}"
       rm -rf "${RAMDISK_PATH}"
     fi
     # Uses the extractor to untar pat file
@@ -915,12 +888,12 @@ function extractDsmFiles() {
   echo "$(TEXT "OK")"
 
   echo -n "$(TEXT "Copying files: ")"
-  cp "${UNTAR_PAT_PATH}/grub_cksum.syno" "${BOOTLOADER_PATH}"
-  cp "${UNTAR_PAT_PATH}/GRUB_VER" "${BOOTLOADER_PATH}"
-  cp "${UNTAR_PAT_PATH}/grub_cksum.syno" "${SLPART_PATH}"
-  cp "${UNTAR_PAT_PATH}/GRUB_VER" "${SLPART_PATH}"
-  cp "${UNTAR_PAT_PATH}/zImage" "${ORI_ZIMAGE_FILE}"
-  cp "${UNTAR_PAT_PATH}/rd.gz" "${ORI_RDGZ_FILE}"
+  cp -f "${UNTAR_PAT_PATH}/grub_cksum.syno" "${BOOTLOADER_PATH}"
+  cp -f "${UNTAR_PAT_PATH}/GRUB_VER" "${BOOTLOADER_PATH}"
+  cp -f "${UNTAR_PAT_PATH}/grub_cksum.syno" "${SLPART_PATH}"
+  cp -f "${UNTAR_PAT_PATH}/GRUB_VER" "${SLPART_PATH}"
+  cp -f "${UNTAR_PAT_PATH}/zImage" "${ORI_ZIMAGE_FILE}"
+  cp -f "${UNTAR_PAT_PATH}/rd.gz" "${ORI_RDGZ_FILE}"
   rm -rf "${UNTAR_PAT_PATH}"
   echo "$(TEXT "OK")"
 }
@@ -994,7 +967,7 @@ function make() {
 function advancedMenu() {
   NEXT="l"
   while true; do
-    rm "${TMP_PATH}/menu"
+    rm -f "${TMP_PATH}/menu"
     if [ -n "${PRODUCTVER}" ]; then
       echo "l \"$(TEXT "Switch LKM version:") \Z4${LKM}\Zn\"" >>"${TMP_PATH}/menu"
     fi
@@ -1006,7 +979,7 @@ function advancedMenu() {
         echo "k \"$(TEXT "kernel switching method:") \Z4${KERNELWAY}\Zn\"" >>"${TMP_PATH}/menu"
       fi
     fi
-    echo "m \"$(TEXT "Switch 'Do not set MACs':") \Z4${NOTSETMACS}\Zn\"" >>"${TMP_PATH}/menu"
+    echo "m \"$(TEXT "Set static IP")\"" >>"${TMP_PATH}/menu"
     echo "u \"$(TEXT "Edit user config file manually")\"" >>"${TMP_PATH}/menu"
     echo "t \"$(TEXT "Try to recovery a DSM installed system")\"" >>"${TMP_PATH}/menu"
     echo "s \"$(TEXT "Show SATA(s) # ports and drives")\"" >>"${TMP_PATH}/menu"
@@ -1074,8 +1047,44 @@ function advancedMenu() {
       NEXT="e"
       ;;
     m)
-      [ "${NOTSETMACS}" = "false" ] && NOTSETMACS='true' || NOTSETMACS='false'
-      writeConfigKey "notsetmacs" "${NOTSETMACS}" "${USER_CONFIG_FILE}"
+      MSG="$(TEXT "Temporary IP: (UI will not refresh)")"
+      ITEMS=""
+      IDX=0
+      ETHX=($(ls /sys/class/net/ | grep eth)) # real network cards list
+      for ETH in ${ETHX[@]}; do
+        [ ${IDX} -gt 7 ] && break # Currently, only up to 8 are supported.  (<==> boot.sh L96, <==> lkm: MAX_NET_IFACES)
+        IDX=$((${IDX} + 1))
+        MACR="$(cat /sys/class/net/${ETH}/address | sed 's/://g')"
+        IPR="$(readConfigKey "network.${MACR}" "${USER_CONFIG_FILE}")"
+        ITEMS+="${ETH}(${MACR}) ${IDX} 1 ${IPR:-\"\"} ${IDX} 22 20 16 "
+      done
+      echo ${ITEMS} >"${TMP_PATH}/opts"
+      dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Advanced")" \
+        --form "${MSG}" 10 44 ${IDX} --file "${TMP_PATH}/opts" \
+        2>"${TMP_PATH}/resp"
+      [ $? -ne 0 ] && continue
+      (
+      IDX=1
+      for ETH in ${ETHX[@]}; do
+        MACR="$(cat /sys/class/net/${ETH}/address | sed 's/://g')"
+        IPR="$(readConfigKey "network.${MACR}" "${USER_CONFIG_FILE}")"
+        IPC="$(cat "${TMP_PATH}/resp" | sed -n "${IDX}p")"
+        if [ -n "${IPC}" -a "${IPR}" != "${IPC}" ]; then
+          if ! echo "${IPC}" | grep -q "/"; then
+            IPC="${IPC}/24"
+          fi
+          ip addr add ${IPC} dev ${ETH}
+          writeConfigKey "network.${MACR}" "${IPC}" "${USER_CONFIG_FILE}"
+          sleep 1
+        elif [ -z "${IPC}" ]; then
+          deleteConfigKey "network.${MACR}" "${USER_CONFIG_FILE}"
+        fi
+        IDX=$((${IDX} + 1))
+      done
+      sleep 1
+      IP=$(ip route 2>/dev/null | sed -n 's/.* via .* dev \(.*\)  src \(.*\)  metric .*/\1: \2 /p' | head -1)
+      ) | dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Advanced")" \
+        --progressbox "$(TEXT "Set IP..")" 20 70
       NEXT="e"
       ;;
     u)
@@ -1145,8 +1154,8 @@ function advancedMenu() {
         --form "${MSG}" 10 110 2 "URL" 1 1 "${PATURL}" 1 5 100 0 "MD5" 2 1 "${PATSUM}" 2 5 100 0 \
         2>"${TMP_PATH}/resp"
       [ $? -ne 0 ] && return
-      paturl="$(cat "${TMP_PATH}/resp" | tail -n +1 | head -1)"
-      patsum="$(cat "${TMP_PATH}/resp" | tail -n +2 | head -1)"
+      paturl="$(cat "${TMP_PATH}/resp" | sed -n '1p')"
+      patsum="$(cat "${TMP_PATH}/resp" | sed -n '2p')"
       if [ ! ${paturl} = ${PATURL} ] || [ ! ${patsum} = ${PATSUM} ]; then
         writeConfigKey "paturl" "${paturl}" "${USER_CONFIG_FILE}"
         writeConfigKey "patsum" "${patsum}" "${USER_CONFIG_FILE}"
@@ -1217,7 +1226,7 @@ function advancedMenu() {
       for I in $(ls /dev/sd*1 2>/dev/null | grep -v "${LOADER_DISK}1"); do
         mount ${I} "${TMP_PATH}/sdX1"
         if [ -f "${TMP_PATH}/sdX1/etc/shadow" ]; then
-          cp "${TMP_PATH}/sdX1/etc/shadow" "${TMP_PATH}/shadow_bak"
+          cp -f "${TMP_PATH}/sdX1/etc/shadow" "${TMP_PATH}/shadow_bak"
           SHADOW_FILE="${TMP_PATH}/shadow_bak"
         fi
         umount "${I}"
@@ -1278,7 +1287,7 @@ function advancedMenu() {
         xz -dc <"${ARPL_RAMDISK_FILE}" | cpio -idm
       ) >/dev/null 2>&1 || true
       rm -rf "${RDXZ_PATH}/opt/arpl"
-      cp -rf "/opt" "${RDXZ_PATH}/"
+      cp -Rf "/opt" "${RDXZ_PATH}/"
       (
         cd "${RDXZ_PATH}"
         find . 2>/dev/null | cpio -o -H newc -R root:root | xz --check=crc32 >"${ARPL_RAMDISK_FILE}"
@@ -1451,8 +1460,8 @@ function tryRecoveryDSM() {
         if [ -n "${MODEL}" ]; then
           productversMenu "${majorversion}.${minorversion}"
           if [ -n "${PRODUCTVER}" ]; then
-            cp "${DSMROOT_PATH}/.syno/patch/zImage" "${SLPART_PATH}"
-            cp "${DSMROOT_PATH}/.syno/patch/rd.gz" "${SLPART_PATH}"
+            cp -f "${DSMROOT_PATH}/.syno/patch/zImage" "${SLPART_PATH}"
+            cp -f "${DSMROOT_PATH}/.syno/patch/rd.gz" "${SLPART_PATH}"
             MSG="$(printf "$(TEXT "Found a installation:\nModel: %s\nProductversion: %s")" "${MODEL}" "${PRODUCTVER}")"
             SN=$(_get_conf_kv SN "${DSMROOT_PATH}/etc/synoinfo.conf")
             if [ -n "${SN}" ]; then
@@ -1482,7 +1491,7 @@ function editUserConfig() {
     dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Edit with caution")" \
       --editbox "${USER_CONFIG_FILE}" 0 0 2>"${TMP_PATH}/userconfig"
     [ $? -ne 0 ] && return
-    mv "${TMP_PATH}/userconfig" "${USER_CONFIG_FILE}"
+    mv -f "${TMP_PATH}/userconfig" "${USER_CONFIG_FILE}"
     ERRORS=$(yq eval "${USER_CONFIG_FILE}" 2>&1)
     [ $? -eq 0 ] && break
     dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Edit with caution")" \
@@ -1658,7 +1667,7 @@ function updateArpl() {
       tar -zxf "${TMP_PATH}/$(basename "${KEY}").tgz" -C "${VALUE}"
     else
       mkdir -p "$(dirname "${VALUE}")"
-      mv "${TMP_PATH}/$(basename "${KEY}")" "${VALUE}"
+      mv -f "${TMP_PATH}/$(basename "${KEY}")" "${VALUE}"
     fi
   done < <(readConfigMap "replace" "${TMP_PATH}/update-list.yml")
   dialog --backtitle "$(backtitle)" --colors --title "${T}" \
@@ -1687,7 +1696,7 @@ function updateExts() {
       tar -xaf "${PKG}" -C "${ADDONS_PATH}/${ADDON}" >/dev/null 2>&1
     done
   elif [ "${1}" = "modules" ]; then
-    rm "${MODULES_PATH}/"*
+    rm -rf "${MODULES_PATH}/"*
     unzip ${TMP_PATH}/modules.zip -d "${MODULES_PATH}" >/dev/null 2>&1
     # Rebuild modules if model/buildnumber is selected
     PLATFORM="$(readModelKey "${MODEL}" "platform")"
@@ -1715,15 +1724,19 @@ function updateExts() {
 
 ###############################################################################
 function updateMenu() {
-  PROXY="$(readConfigKey "proxy" "${USER_CONFIG_FILE}")"
-  [ -n "${PROXY}" ] && [[ "${PROXY: -1}" != "/" ]] && PROXY="${PROXY}/"
   while true; do
-    rm "${TMP_PATH}/menu"
+    CUR_ARPL_VER="${ARPL_VERSION:-0}"
+    CUR_ADDONS_VER="$(cat "${CACHE_PATH}/addons/VERSION" 2>/dev/null)"
+    CUR_MODULES_VER="$(cat "${CACHE_PATH}/modules/VERSION" 2>/dev/null)"
+    CUR_LKMS_VER="$(cat "${CACHE_PATH}/lkms/VERSION" 2>/dev/null)"
+    PROXY="$(readConfigKey "proxy" "${USER_CONFIG_FILE}")"
+    [ -n "${PROXY}" ] && [[ "${PROXY: -1}" != "/" ]] && PROXY="${PROXY}/"
+    rm -f "${TMP_PATH}/menu"
     echo "a \"$(TEXT "Update all")\"" >>"${TMP_PATH}/menu"
-    echo "r \"$(TEXT "Update arpl")\"" >>"${TMP_PATH}/menu"
-    echo "d \"$(TEXT "Update addons")\"" >>"${TMP_PATH}/menu"
-    echo "m \"$(TEXT "Update modules")\"" >>"${TMP_PATH}/menu"
-    echo "l \"$(TEXT "Update LKMs")\"" >>"${TMP_PATH}/menu"
+    echo "r \"$(TEXT "Update arpl")(${CUR_ARPL_VER:-None})\"" >>"${TMP_PATH}/menu"
+    echo "d \"$(TEXT "Update addons")(${CUR_ADDONS_VER:-None})\"" >>"${TMP_PATH}/menu"
+    echo "m \"$(TEXT "Update modules")(${CUR_MODULES_VER:-None})\"" >>"${TMP_PATH}/menu"
+    echo "l \"$(TEXT "Update LKMs")(${CUR_LKMS_VER:-None})\"" >>"${TMP_PATH}/menu"
     if [ -n "${DEBUG}" ]; then
       echo "p \"$(TEXT "Set proxy server")\"" >>"${TMP_PATH}/menu"
     fi
@@ -1738,52 +1751,44 @@ function updateMenu() {
     case "$(<${TMP_PATH}/resp)" in
     a)
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "addons")")"
-      CURVER="$(cat "${CACHE_PATH}/addons/VERSION" 2>/dev/null)"
-      downloadExts "addons" "${CURVER:-0}" "https://github.com/wjz304/arpl-addons" "addons" "1"
+      downloadExts "addons" "${CUR_ADDONS_VER:-None}" "https://github.com/wjz304/arpl-addons" "addons" "1"
       [ $? -eq 0 ] && updateExts "addons" "1"
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "modules")")"
-      CURVER="$(cat "${CACHE_PATH}/modules/VERSION" 2>/dev/null)"
-      downloadExts "modules" "${CURVER:-0}" "https://github.com/wjz304/arpl-modules" "modules" "1"
+      downloadExts "modules" "${CUR_MODULES_VER:-None}" "https://github.com/wjz304/arpl-modules" "modules" "1"
       [ $? -eq 0 ] && updateExts "modules" "1"
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "LKMs")")"
-      CURVER="$(cat "${CACHE_PATH}/lkms/VERSION" 2>/dev/null)"
-      downloadExts "LKMs" "${CURVER:-0}" "https://github.com/wjz304/redpill-lkm" "rp-lkms" "1"
+      downloadExts "LKMs" "${CUR_LKMS_VER:-None}" "https://github.com/wjz304/redpill-lkm" "rp-lkms" "1"
       [ $? -eq 0 ] && updateExts "LKMs" "1"
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "arpl")")"
-      CURVER="${ARPL_VERSION:-0}"
-      downloadExts "arpl" "${CURVER}" "https://github.com/wjz304/arpl-i18n" "update" "0"
+      downloadExts "arpl" "${CUR_ARPL_VER:-None}" "https://github.com/wjz304/arpl-i18n" "update" "0"
       [ $? -ne 0 ] && continue
       updateArpl "arpl"
       ;;
 
     r)
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "arpl")")"
-      CURVER="${ARPL_VERSION:-0}"
-      downloadExts "arpl" "${CURVER}" "https://github.com/wjz304/arpl-i18n" "update" "0"
+      downloadExts "arpl" "${CUR_ARPL_VER:-None}" "https://github.com/wjz304/arpl-i18n" "update" "0"
       [ $? -ne 0 ] && continue
       updateArpl "arpl"
       ;;
 
     d)
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "addons")")"
-      CURVER="$(cat "${CACHE_PATH}/addons/VERSION" 2>/dev/null)"
-      downloadExts "addons" "${CURVER:-0}" "https://github.com/wjz304/arpl-addons" "addons" "0"
+      downloadExts "addons" "${CUR_ADDONS_VER:-None}" "https://github.com/wjz304/arpl-addons" "addons" "0"
       [ $? -ne 0 ] && continue
       updateExts "addons" "0"
       ;;
 
     m)
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "modules")")"
-      CURVER="$(cat "${CACHE_PATH}/modules/VERSION" 2>/dev/null)"
-      downloadExts "modules" "${CURVER:-0}" "https://github.com/wjz304/arpl-modules" "modules" "0"
+      downloadExts "modules" "${CUR_MODULES_VER:-None}" "https://github.com/wjz304/arpl-modules" "modules" "0"
       [ $? -ne 0 ] && continue
       updateExts "modules" "0"
       ;;
 
     l)
       T="$(printf "$(TEXT "Update %s")" "$(TEXT "LKMs")")"
-      CURVER="$(cat "${CACHE_PATH}/lkms/VERSION" 2>/dev/null)"
-      downloadExts "LKMs" "${CURVER:-0}" "https://github.com/wjz304/redpill-lkm" "rp-lkms" "0"
+      downloadExts "LKMs" "${CUR_LKMS_VER:-None}" "https://github.com/wjz304/redpill-lkm" "rp-lkms" "0"
       [ $? -ne 0 ] && continue
       updateExts "LKMs" "0"
       ;;
@@ -1843,8 +1848,8 @@ function updateMenu() {
         dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Update")" \
           --msgbox "$(TEXT "Not a valid file, please try again!")" 0 0
       else
-        rm "${TMP_PATH}/${USER_FILE}"
-        mv "${TMP_UP_PATH}/${USER_FILE}" "${TMP_PATH}/${USER_FILE}"
+        rm -f "${TMP_PATH}/${USER_FILE}"
+        mv -f "${TMP_UP_PATH}/${USER_FILE}" "${TMP_PATH}/${USER_FILE}"
         if [ "${USER_FILE}" = "update.zip" ]; then
           updateArpl "arpl"
         elif [ "${USER_FILE}" = "addons.zip" ]; then
@@ -1875,7 +1880,7 @@ function notepadMenu() {
   dialog --backtitle "$(backtitle)" --colors --title "$(TEXT "Edit")" \
     --editbox "${USER_UP_PATH}/notepad" 0 0 2>"${TMP_PATH}/notepad"
   [ $? -ne 0 ] && return
-  mv "${TMP_PATH}/notepad" "${USER_UP_PATH}/notepad"
+  mv -f "${TMP_PATH}/notepad" "${USER_UP_PATH}/notepad"
 }
 
 ###############################################################################

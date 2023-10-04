@@ -7,19 +7,25 @@ assignees: ''
 
 ---
 
-Install ENV:  
- * motherboard:  
+Install ENV: (You can find it in the boot interface.)  
+ * DMI:  
  * CPU:  
  * NIC:  
 
-Arpl version:  
+Arpl version: (You can find it in the update menu.)  
+ * arpl:  
+ * addons:  
+ * modules:  
+ * lkms:  
 
-DSM model:  
-DSM version:  
+DSM: 
+ * model:  
+ * version:  
 
 Issue:  
 
 logs:  
 
+(Plz review the content of #173, #175, #226 first)  
 ...
 

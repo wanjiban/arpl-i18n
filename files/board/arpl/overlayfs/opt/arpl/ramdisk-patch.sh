@@ -39,7 +39,7 @@ LAYOUT="$(readConfigKey "layout" "${USER_CONFIG_FILE}")"
 KEYMAP="$(readConfigKey "keymap" "${USER_CONFIG_FILE}")"
 PATURL="$(readConfigKey "paturl" "${USER_CONFIG_FILE}")"
 PATSUM="$(readConfigKey "patsum" "${USER_CONFIG_FILE}")"
-ODP="$(readConfigKey "odp" "${USER_CONFIG_FILE}")"  # official drivers priorities
+ODP="$(readConfigKey "odp" "${USER_CONFIG_FILE}")" # official drivers priorities
 
 # Check if DSM buildnumber changed
 . "${RAMDISK_PATH}/etc/VERSION"
@@ -89,11 +89,21 @@ while IFS=': ' read KEY VALUE; do
   [ -n "${KEY}" ] && USERMODULES["${KEY}"]="${VALUE}"
 done < <(readConfigMap "modules" "${USER_CONFIG_FILE}")
 
-# Patches
-while read f; do
-  echo -n "."
-  echo "Patching with ${f}" >"${LOG_FILE}" 2>&1
-  (cd "${RAMDISK_PATH}" && patch -p1 <"${PATCH_PATH}/${f}") >>"${LOG_FILE}" 2>&1 || dieLog
+# Patches (diff -Naru OLDFILE NEWFILE > xxx.patch)
+while read PE; do
+  RET=1
+  echo "Patching with ${PE}" >"${LOG_FILE}" 2>&1
+  for PF in $(ls ${PATCH_PATH}/${PE}); do
+    echo -n "."
+    echo "Patching with ${PF}" >>"${LOG_FILE}" 2>&1
+    (
+      cd "${RAMDISK_PATH}"
+      patch -p1 -i "${PF}" >>"${LOG_FILE}" 2>&1
+    )
+    RET=$?
+    [ ${RET} -eq 0 ] && break
+  done
+  [ ${RET} -ne 0 ] && dieLog
 done < <(readModelArray "${MODEL}" "productvers.[${PRODUCTVER}].patch")
 
 # Patch /etc/synoinfo.conf
@@ -108,7 +118,7 @@ _set_conf_kv "SN" "${SN}" "${RAMDISK_PATH}/etc/synoinfo.conf" >"${LOG_FILE}" 2>&
 echo -n "."
 grep -v -e '^[\t ]*#' -e '^$' "${PATCH_PATH}/config-manipulators.sh" >"${TMP_PATH}/rp.txt"
 sed -e "/@@@CONFIG-MANIPULATORS-TOOLS@@@/ {" -e "r ${TMP_PATH}/rp.txt" -e 'd' -e '}' -i "${RAMDISK_PATH}/sbin/init.post"
-rm "${TMP_PATH}/rp.txt"
+rm -f "${TMP_PATH}/rp.txt"
 touch "${TMP_PATH}/rp.txt"
 for KEY in ${!SYNOINFO[@]}; do
   echo "_set_conf_kv '${KEY}' '${SYNOINFO[${KEY}]}' '/tmpRoot/etc/synoinfo.conf'" >>"${TMP_PATH}/rp.txt"
@@ -117,7 +127,7 @@ done
 echo "_set_conf_kv 'SN' '${SN}' '/tmpRoot/etc/synoinfo.conf'" >>"${TMP_PATH}/rp.txt"
 echo "_set_conf_kv 'SN' '${SN}' '/tmpRoot/etc.defaults/synoinfo.conf'" >>"${TMP_PATH}/rp.txt"
 sed -e "/@@@CONFIG-GENERATED@@@/ {" -e "r ${TMP_PATH}/rp.txt" -e 'd' -e '}' -i "${RAMDISK_PATH}/sbin/init.post"
-rm "${TMP_PATH}/rp.txt"
+rm -f "${TMP_PATH}/rp.txt"
 
 echo -n "."
 # Extract modules to ramdisk
@@ -140,7 +150,7 @@ rm -rf "${TMP_PATH}/modules"
 
 echo -n "."
 # Copying fake modprobe
-cp "${PATCH_PATH}/iosched-trampoline.sh" "${RAMDISK_PATH}/usr/sbin/modprobe"
+cp -f "${PATCH_PATH}/iosched-trampoline.sh" "${RAMDISK_PATH}/usr/sbin/modprobe"
 # Copying LKM to /usr/lib/modules
 gzip -dc "${LKM_PATH}/rp-${PLATFORM}-$([ -n "${KPRE}" ] && echo "${KPRE}-")${KVER}-${LKM}.ko.gz" >"${RAMDISK_PATH}/usr/lib/modules/rp.ko"
 

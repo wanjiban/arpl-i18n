@@ -22,7 +22,7 @@ jobs:
 
       - name: Check Issues
         run: |
-          if echo "${{ github.event.issue.body }}" | grep -q "DS"; then 
+          if echo "${{ github.event.issue.body }}" | grep -q "ENV"; then 
             echo "FALG=true" >> $GITHUB_ENV
           else
             echo "FALG=false" >> $GITHUB_ENV
@@ -37,4 +37,29 @@ jobs:
           issue-number: ${{ github.event.issue.number }}
           body: |
             <img src="https://user-images.githubusercontent.com/5615843/235939097-6798da58-24fd-44cc-9970-c8d2f9609704.jpg" width="400">
+
+            Please fill in the following information.
+
+            Install ENV: (You can find it in the boot interface.)  
+            * DMI:  
+            * CPU:  
+            * NIC:  
+
+            Arpl version: (You can find it in the update menu.)  
+            * arpl:  
+            * addons:  
+            * modules:  
+            * lkms:  
+
+            DSM: 
+            * model:  
+            * version:  
+
+            Issue:  
+
+            logs:  
+
+            (Plz review the content of #173, #175, #226 first)  
+            ...
+
           emoji: heart
